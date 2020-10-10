@@ -37,6 +37,10 @@
 			'2.2.0.beta5' => '2.5.2'
 		];
 
+		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
+		// "debsource" install
+		const NODE_VERSION = '10';
+
 		const APP_NAME = 'Discourse';
 		const DEFAULT_VERSION_LOCK = 'minor';
 		const DISCOURSE_REPO = 'https://github.com/discourse/discourse.git';
@@ -400,6 +404,11 @@
 				}
 			}
 
+			if (!empty($opts['ssl'])) {
+				// @TODO make reconfigurable
+				$rules = 'RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}' . "\n" .
+					$rules;
+			}
 			if (!$this->file_put_file_contents($approot . '/public/.htaccess',
 				'# Enable caching' . "\n" .
 				'UnsetEnv no-cache' . "\n" .
@@ -679,18 +688,18 @@
 		private function assetsCompile(string $approot, string $appenv = 'production'): bool
 		{
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
-			if (!$wrapper->node_installed('lts')) {
-				$wrapper->node_install('lts');
-				$wrapper->node_make_default('lts', $approot);
+			if (!$wrapper->node_installed(self::NODE_VERSION)) {
+				$wrapper->node_install(self::NODE_VERSION);
+				$wrapper->node_make_default(self::NODE_VERSION, $approot);
 			}
 			// update deps
-			$wrapper->node_do('lts', 'yarn install');
-			$ret = $wrapper->node_do('lts', 'npm install -g yarn uglify-js@2');
+			$wrapper->node_do(self::NODE_VERSION, 'yarn install');
+			$ret = $wrapper->node_do(self::NODE_VERSION, 'npm install -g yarn uglify-js@2');
 			if (!$ret['success']) {
 				return error('Failed to install uglifyjs: %s', $ret['error']);
 			}
 			$this->fixupMaxMind($wrapper, $approot);
-			return $this->rake($approot, 'assets:precompile') && $this->rake($approot, 'assets:clean');
+			return $this->rake($approot, 'assets:clean') && $this->rake($approot, 'assets:precompile');
 		}
 
 		/**
