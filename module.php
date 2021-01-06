@@ -358,7 +358,7 @@
 					$this->file_chmod($approot . '/launch.sh', 755);
 				}
 			} catch (\apnscpException $e) {
-				dlog($e->getBacktrace());
+				dlog($e->getTraceAsString());
 
 				return error('Error encountered during housekeeping. Discourse may be incomplete: %s',
 					$e->getMessage());
