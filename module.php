@@ -166,11 +166,6 @@
 					$limit);
 			}
 
-			if (!platform_is('7.5')) {
-				return error('Discourse requires at least a v7.5 platform. Current platform version %s',
-					platform_version());
-			}
-
 			if (!$this->ssh_enabled()) {
 				return error('Discourse requires ssh service to be enabled');
 			}
@@ -318,6 +313,7 @@
 			 */
 			$exold = \Error_Reporter::exception_upgrade();
 			try {
+				$this->checkNode(self::NODE_VERSION, $wrapper);
 				$this->migrate($approot, 'production');
 				$this->assetsCompile($approot, 'production');
 				if (version_compare($opts['version'], '2.4.0', '<=')) {
@@ -688,10 +684,8 @@
 		private function assetsCompile(string $approot, string $appenv = 'production'): bool
 		{
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
-			if (!$wrapper->node_installed(self::NODE_VERSION)) {
-				$wrapper->node_install(self::NODE_VERSION);
-				$wrapper->node_make_default(self::NODE_VERSION, $approot);
-			}
+			$this->checkNode(self::NODE_VERSION, $wrapper);
+			$wrapper->node_make_default(self::NODE_VERSION, $approot);
 			// update deps
 			$wrapper->node_do(self::NODE_VERSION, 'yarn install');
 			$ret = $wrapper->node_do(self::NODE_VERSION, 'npm install -g yarn uglify-js@2');
@@ -700,6 +694,15 @@
 			}
 			$this->fixupMaxMind($wrapper, $approot);
 			return $this->rake($approot, 'assets:clean') && $this->rake($approot, 'assets:precompile');
+		}
+
+		private function checkNode(string $version, \apnscpFunctionInterceptor $wrapper): void
+		{
+			if ($wrapper->node_installed($version)) {
+				return;
+			}
+
+			$wrapper->node_install($version);
 		}
 
 		/**
