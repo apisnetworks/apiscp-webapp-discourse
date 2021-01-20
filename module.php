@@ -39,7 +39,10 @@
 
 		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
 		// "debsource" install
-		const NODE_VERSION = '10';
+		const NODE_VERSIONS = [
+			'0'   => '8',
+			'2.5' => '10'
+		];
 
 		const APP_NAME = 'Discourse';
 		const DEFAULT_VERSION_LOCK = 'minor';
@@ -161,7 +164,7 @@
 			}
 
 			if ($this->getServiceValue('cgroup', 'enabled') && ($limit = $this->getServiceValue('cgroup',
-					'proclimit')) < 100) {
+					'proclimit') ?: 100) < 100) {
 				return error("Resource limits enforced. proclimit `%d' is below minimum value 100. Change via cgroup,proclimit",
 					$limit);
 			}
@@ -226,7 +229,7 @@
 				$wrapper->git_clone(static::DISCOURSE_REPO, $docroot,
 					[
 						'recursive' => null,
-						'depth'     => 0,
+						'depth'     => 1,
 						'branch'    => 'v' . $opts['version']
 					]);
 				$wrapper->ruby_make_default(self::DEFAULT_RUBY, $docroot);
@@ -313,7 +316,8 @@
 			 */
 			$exold = \Error_Reporter::exception_upgrade();
 			try {
-				$this->checkNode(self::NODE_VERSION, $wrapper);
+
+				$this->checkNode($opts['version'], $wrapper);
 				$this->migrate($approot, 'production');
 				$this->assetsCompile($approot, 'production');
 				if (version_compare($opts['version'], '2.4.0', '<=')) {
@@ -684,25 +688,42 @@
 		private function assetsCompile(string $approot, string $appenv = 'production'): bool
 		{
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
-			$this->checkNode(self::NODE_VERSION, $wrapper);
-			$wrapper->node_make_default(self::NODE_VERSION, $approot);
+
+			$parts = $this->web_extract_components_from_path($approot);
+			$discourseVersion = $this->get_version($parts['hostname'], $parts['path']);
+			if (null === $discourseVersion) {
+				return error("Failed to discover Discourse version in `%s'/`%s'", $parts['hostname'], $parts['path']);
+			}
+			$nodeVersion = $this->checkNode($discourseVersion, $wrapper);
+			$wrapper->node_make_default($nodeVersion, $approot);
 			// update deps
-			$wrapper->node_do(self::NODE_VERSION, 'yarn install');
-			$ret = $wrapper->node_do(self::NODE_VERSION, 'npm install -g yarn uglify-js@2');
+			$wrapper->node_do($nodeVersion, 'yarn install');
+			$ret = $wrapper->node_do(
+				$nodeVersion,
+				'env NODE_ENV=' . escapeshellarg($appenv) . ' npm install -g yarn uglify-js@2'
+			);
 			if (!$ret['success']) {
 				return error('Failed to install uglifyjs: %s', $ret['error']);
 			}
 			$this->fixupMaxMind($wrapper, $approot);
-			return $this->rake($approot, 'assets:clean') && $this->rake($approot, 'assets:precompile');
+			return $this->rake($approot, 'assets:clean', $appenv) && $this->rake($approot, 'assets:precompile', $appenv);
 		}
 
-		private function checkNode(string $version, \apnscpFunctionInterceptor $wrapper): void
+		/**
+		 * Verify specific Node major installed
+		 *
+		 * @param string                    $version Discourse version
+		 * @param apnscpFunctionInterceptor $wrapper
+		 * @return string required Node version
+		 */
+		private function checkNode(string $version, \apnscpFunctionInterceptor $wrapper): string
 		{
-			if ($wrapper->node_installed($version)) {
-				return;
+			$nodeVersion = \Opcenter\Versioning::satisfy($version, self::NODE_VERSIONS);
+			if (!$wrapper->node_installed($nodeVersion)) {
+				$wrapper->node_install($nodeVersion);
 			}
 
-			$wrapper->node_install($version);
+			return $nodeVersion;
 		}
 
 		/**
@@ -710,7 +731,8 @@
 		 *
 		 * CCPA places MaxMind behind a portal. Only available in master
 		 *
-		 * @param string $approot
+		 * @param apnscpFunctionInterceptor $wrapper
+		 * @param string                    $approot
 		 * @return bool
 		 */
 		private function fixupMaxMind(apnscpFunctionInterceptor $wrapper, string $approot): bool
@@ -1057,13 +1079,8 @@
 		{
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
 			$version = $wrapper->ruby_version_from_path($approot);
-			$minVersion = '2.0';
-			foreach (self::MINIMUM_INTERPRETERS as $a => $b) {
-				if ($discourseVersion < $a) {
-					break;
-				}
-				$minVersion = $b;
-			}
+
+			$minVersion = \Opcenter\Versioning::satisfy($version, self::MINIMUM_INTERPRETERS);
 
 			return version_compare($version, $minVersion, '>=');
 		}
