@@ -319,7 +319,7 @@
 
 				$this->checkNode($opts['version'], $wrapper);
 				$this->migrate($approot, 'production');
-				$this->assetsCompile($approot, 'production');
+				$this->assetsCompile($hostname, $path, 'production');
 				if (version_compare($opts['version'], '2.4.0', '<=')) {
 					$this->launchSidekiq($approot, 'production');
 
@@ -680,19 +680,20 @@
 		/**
 		 * Compile assets
 		 *
-		 * @param string $approot
+		 * @param string $hostname
+		 * @param string $path
 		 * @param string $appenv
 		 *
 		 * @return bool
 		 */
-		private function assetsCompile(string $approot, string $appenv = 'production'): bool
+		private function assetsCompile(string $hostname, string $path = '', string $appenv = 'production'): bool
 		{
+			$approot = $this->getAppRoot($hostname, $path);
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
 
-			$parts = $this->web_extract_components_from_path($approot);
-			$discourseVersion = $this->get_version($parts['hostname'], $parts['path']);
+			$discourseVersion = $this->get_version($hostname, $path);
 			if (null === $discourseVersion) {
-				return error("Failed to discover Discourse version in `%s'/`%s'", $parts['hostname'], $parts['path']);
+				return error("Failed to discover Discourse version in `%s'/`%s'", $hostname, $path);
 			}
 			$nodeVersion = $this->checkNode($discourseVersion, $wrapper);
 			$wrapper->node_make_default($nodeVersion, $approot);
@@ -1016,7 +1017,7 @@
 			if ($ret) {
 				// use default Ruby wrapper
 				$wrapper->ruby_do('', $approot, 'bundle install -j' . min(4, (int)NPROC + 1));
-				if (!$this->assetsCompile($approot)) {
+				if (!$this->assetsCompile($hostname, $path)) {
 					warn('Failed to compile assets');
 				}
 				$this->migrate($approot);
