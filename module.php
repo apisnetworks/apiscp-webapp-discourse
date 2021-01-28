@@ -34,14 +34,16 @@
 		// via config/application.rb
 		const MINIMUM_INTERPRETERS = [
 			'0'           => '2.4.2',
-			'2.2.0.beta5' => '2.5.2'
+			'2.2.0.beta5' => '2.5.2',
+			'2.5.0'       => '2.7.2'
 		];
 
 		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
 		// "debsource" install
 		const NODE_VERSIONS = [
 			'0'   => '8',
-			'2.5' => '10'
+			'2.4' => '10',
+			'2.5' => '14'
 		];
 
 		const APP_NAME = 'Discourse';
@@ -212,7 +214,8 @@
 				return false;
 			}
 
-			$this->validateRuby(self::DEFAULT_RUBY, $opts['user'] ?? null);
+			$rubyVersion = \Opcenter\Versioning::satisfy($opts['version'], self::MINIMUM_INTERPRETERS);
+			$this->validateRuby($rubyVersion, $opts['user'] ?? null);
 
 			$args['version'] = $opts['version'];
 			$db = \Module\Support\Webapps\DatabaseGenerator::pgsql($this->getAuthContext(), $hostname);
@@ -232,8 +235,7 @@
 						'depth'     => 1,
 						'branch'    => 'v' . $opts['version']
 					]);
-				$wrapper->ruby_make_default(self::DEFAULT_RUBY, $docroot);
-
+				$this->ruby_make_default($rubyVersion, $docroot);
 				$bundler = 'bundler:"< 2"';
 				if (version_compare($args['version'], '2.3.8', '>=')) {
 					$bundler = 'bundler:"~> 2"';
@@ -317,8 +319,9 @@
 			$exold = \Error_Reporter::exception_upgrade();
 			try {
 
-				$this->checkNode($opts['version'], $wrapper);
-				$this->migrate($approot, 'production');
+				$nodeVersion = $this->validateNode($opts['version'], $wrapper);
+				$this->node_make_default($nodeVersion, $approot);
+				$this->migrate($approot);
 				$this->assetsCompile($hostname, $path, 'production');
 				if (version_compare($opts['version'], '2.4.0', '<=')) {
 					$this->launchSidekiq($approot, 'production');
@@ -399,7 +402,7 @@
 					null,
 					$command
 				];
-				if (!$wrapper->crontab_exists(...$args) && !$wrapper->crontab_add_job(...$args)) {
+				if (!($wrapper->crontab_exists(...$args) || $wrapper->crontab_add_job(...$args))) {
 					warn('Failed to create job to start Passenger on boot. Command: %s', $command);
 				}
 			}
@@ -461,6 +464,7 @@
 		 */
 		protected function validateRuby(string $version = 'lts', string $user = null): bool
 		{
+			debug("Validating Ruby %s installed", $version);
 			if ($user) {
 				$afi = \apnscpFunctionInterceptor::factory(Auth::context($user, $this->site));
 			}
@@ -559,9 +563,11 @@
 
 		private function rake(string $approot, string $task, string $appenv = 'production'): bool
 		{
-			$ret = $this->_exec($approot, 'rbenv exec bundle exec rake -j' . min(4, (int)NPROC + 1) . ' ' . $task, [
+			// https://github.com/nodejs/node/issues/25933
+			// as is soft, which allows raising to unlimited
+			$ret = $this->_exec($approot, 'ulimit -v unlimited ; rbenv exec bundle exec rake -j' . min(4, (int)NPROC + 1) . ' ' . $task, [
 				'PATH'      => getenv('PATH') . PATH_SEPARATOR . './node_modules/.bin' . PATH_SEPARATOR . '~/node_modules/.bin/',
-				'RAILS_ENV' => $appenv
+				'RAILS_ENV' => $appenv,
 			]);
 
 			return $ret['success'] ?: error("failed Rake task `%s': %s", $task,
@@ -695,7 +701,7 @@
 			if (null === $discourseVersion) {
 				return error("Failed to discover Discourse version in `%s'/`%s'", $hostname, $path);
 			}
-			$nodeVersion = $this->checkNode($discourseVersion, $wrapper);
+			$nodeVersion = $this->validateNode($discourseVersion, $wrapper);
 			$wrapper->node_make_default($nodeVersion, $approot);
 			// update deps
 			$wrapper->node_do($nodeVersion, 'yarn install');
@@ -717,9 +723,10 @@
 		 * @param apnscpFunctionInterceptor $wrapper
 		 * @return string required Node version
 		 */
-		private function checkNode(string $version, \apnscpFunctionInterceptor $wrapper): string
+		private function validateNode(string $version, \apnscpFunctionInterceptor $wrapper): string
 		{
 			$nodeVersion = \Opcenter\Versioning::satisfy($version, self::NODE_VERSIONS);
+			debug("Validating Node %s installed", $nodeVersion);
 			if (!$wrapper->node_installed($nodeVersion)) {
 				$wrapper->node_install($nodeVersion);
 			}
