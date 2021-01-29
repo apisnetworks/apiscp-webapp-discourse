@@ -12,6 +12,7 @@
 	 *  +------------------------------------------------------------+
 	 */
 
+	use Module\Support\Webapps\PathManager;
 	use Module\Support\Webapps\Traits\PublicRelocatable;
 	use Module\Support\Webapps\VersionFetcher\Github;
 	use Opcenter\Net\Port;
@@ -29,13 +30,12 @@
 			getAppRoot as getAppRootReal;
 		}
 
-		const DEFAULT_RUBY = '2.6.5';
-
 		// via config/application.rb
 		const MINIMUM_INTERPRETERS = [
 			'0'           => '2.4.2',
 			'2.2.0.beta5' => '2.5.2',
-			'2.5.0'       => '2.7.2'
+			'2.5.0'       => '2.6.5',
+			'2.6.0'       => '2.7.2'
 		];
 
 		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
@@ -241,11 +241,18 @@
 					$bundler = 'bundler:"~> 2"';
 				}
 				$wrapper->ruby_do('', $docroot, 'gem install -E --no-document passenger ' . $bundler);
-				$wrapper->ruby_do('', $docroot, 'bundle install -j' . max(4, (int)NPROC + 1));
+				$bundleFlags = '--deployment --without test development';
+				if (version_compare($args['version'], '2.5.0', '>=')) {
+					$wrapper->ruby_do('', $docroot, 'bundle config set deployment true');
+					$wrapper->ruby_do('', $docroot, 'bundle config set without "test development"');
+					$bundleFlags = '';
+				}
+				$wrapper->ruby_do('', $docroot, 'bundle install ' . $bundleFlags . ' -j' . max(4, (int)NPROC + 1));
 				# renice requires CAP_SYS_NICE, which Discourse doesn't catch
-				$wrapper->file_put_file_contents($wrapper->user_get_home() . '/.rbenv-usergems/' . self::DEFAULT_RUBY . '/bin/renice',
+				$wrapper->file_put_file_contents($wrapper->user_get_home() . '/.rbenv-usergems/' . $rubyVersion . '/bin/renice',
 					"#!/bin/sh\nexec /bin/true");
-				$wrapper->file_chmod($wrapper->user_get_home() . '/.rbenv-usergems/' . self::DEFAULT_RUBY . '/bin/renice', 755);
+				$wrapper->file_chmod($wrapper->user_get_home() . '/.rbenv-usergems/' . $rubyVersion . '/bin/renice', 755);
+				$this->applyPatches($wrapper, $docroot, $args['version']);
 				foreach (['pg_trgm', 'hstore'] as $extension) {
 					$this->pgsql_add_extension($db->database, $extension);
 				}
@@ -547,6 +554,28 @@
 
 			return true;
 
+		}
+
+		/**
+		 * Apply Discourse patches
+		 *
+		 * @param apnscpFunctionInterceptor $wrapper
+		 * @param string                    $approot
+		 * @param string                    $version
+		 * @throws ReflectionException
+		 */
+		private function applyPatches(\apnscpFunctionInterceptor $wrapper, string $approot, string $version): void
+		{
+			if (version_compare('2.5.0', $version, '>=')) {
+				return;
+			}
+
+			$path = PathManager::storehouse('discourse') . '/0001-Rack-Lint-InputWrapper-lacks-size-method.patch';
+			$wrapper->file_put_file_contents($approot . '/0001.patch', file_get_contents($path));
+			$ret = $wrapper->pman_run('cd %s && (git apply 0001.patch ; rm -f 0001.patch)', $approot);
+			if (!$ret['success']) {
+				warn("Failed to apply Rack input patch: %s", $ret['stderr']);
+			}
 		}
 
 		/**
@@ -1020,7 +1049,9 @@
 			if ($wrapper->file_exists($approot . '/lib/discourse_ip_info.rb')) {
 				$wrapper->git_checkout($approot, null, ['lib/discourse_ip_info.rb']);
 			}
+
 			$ret = $wrapper->git_checkout($approot, "v${version}");
+			$this->applyPatches($wrapper, $approot, $version);
 			if ($ret) {
 				// use default Ruby wrapper
 				$wrapper->ruby_do('', $approot, 'bundle install -j' . min(4, (int)NPROC + 1));
@@ -1088,7 +1119,7 @@
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
 			$version = $wrapper->ruby_version_from_path($approot);
 
-			$minVersion = \Opcenter\Versioning::satisfy($version, self::MINIMUM_INTERPRETERS);
+			$minVersion = \Opcenter\Versioning::satisfy($discourseVersion, self::MINIMUM_INTERPRETERS);
 
 			return version_compare($version, $minVersion, '>=');
 		}

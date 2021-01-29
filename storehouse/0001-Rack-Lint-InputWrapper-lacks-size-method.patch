@@ -1,0 +1,24 @@
+From 3556a01267bb3c03114edc91e62f6e75a1810f4c Mon Sep 17 00:00:00 2001
+From: ApisCP Development <dev@apiscp.com>
+Date: Thu, 28 Jan 2021 18:17:45 -0500
+Subject: [PATCH] Rack::Lint::InputWrapper lacks size method
+
+---
+ lib/middleware/anonymous_cache.rb | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/middleware/anonymous_cache.rb b/lib/middleware/anonymous_cache.rb
+index 6da23a55..b5a23ef8 100644
+--- a/lib/middleware/anonymous_cache.rb
++++ b/lib/middleware/anonymous_cache.rb
+@@ -301,7 +301,7 @@ module Middleware
+
+     def call(env)
+       if PAYLOAD_INVALID_REQUEST_METHODS.include?(env[Rack::REQUEST_METHOD]) &&
+-        env[Rack::RACK_INPUT].size > 0
++        (env[Rack::RACK_INPUT].respond_to?(:size) ? env[Rack::RACK_INPUT].size : 0) > 0
+
+         return [413, {}, []]
+       end
+--
+2.27.0
