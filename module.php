@@ -326,7 +326,7 @@
 			$exold = \Error_Reporter::exception_upgrade();
 			try {
 
-				$nodeVersion = $this->validateNode($opts['version'], $wrapper);
+				$nodeVersion = $this->validateNode((string)$opts['version'], $wrapper);
 				$this->node_make_default($nodeVersion, $approot);
 				$this->migrate($approot);
 				$this->assetsCompile($hostname, $path, 'production');
