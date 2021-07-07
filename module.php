@@ -733,13 +733,9 @@
 			$nodeVersion = $this->validateNode($discourseVersion, $wrapper);
 			$wrapper->node_make_default($nodeVersion, $approot);
 			// update deps
-			$wrapper->node_do($nodeVersion, 'yarn install');
-			$ret = $wrapper->node_do(
-				$nodeVersion,
-				'env NODE_ENV=' . escapeshellarg($appenv) . ' npm install -g yarn uglify-js@2'
-			);
+			$ret = $wrapper->node_do($nodeVersion, 'yarn install --production=false');
 			if (!$ret['success']) {
-				return error('Failed to install uglifyjs: %s', $ret['error']);
+				return error('Failed to install packages: %s', $ret['error']);
 			}
 			$this->fixupMaxMind($wrapper, $approot);
 			return $this->rake($approot, 'assets:clean', $appenv) && $this->rake($approot, 'assets:precompile', $appenv);
