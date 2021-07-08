@@ -43,7 +43,8 @@
 		const NODE_VERSIONS = [
 			'0'   => '8',
 			'2.4' => '10',
-			'2.5' => '14'
+			'2.5' => '14',
+			'2.6' => '15'
 		];
 
 		const APP_NAME = 'Discourse';
