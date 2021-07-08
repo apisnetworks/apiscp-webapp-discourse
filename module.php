@@ -733,7 +733,9 @@
 			$nodeVersion = $this->validateNode($discourseVersion, $wrapper);
 			$wrapper->node_make_default($nodeVersion, $approot);
 			// update deps
+			$wrapper->node_do($nodeVersion, 'npm install -g yarn');
 			$ret = $wrapper->node_do($nodeVersion, 'yarn install --production=false');
+
 			if (!$ret['success']) {
 				return error('Failed to install packages: %s', $ret['error']);
 			}
