@@ -733,9 +733,20 @@
 			}
 			$nodeVersion = $this->validateNode($discourseVersion, $wrapper);
 			$wrapper->node_make_default($nodeVersion, $approot);
+
 			// update deps
-			$wrapper->node_do($nodeVersion, 'npm install -g yarn');
-			$ret = $wrapper->node_do($nodeVersion, 'yarn install --production=false');
+			$packages = ['yarn'];
+			if (version_compare($discourseVersion, '2.6', '>=')) {
+				$packages = array_merge($packages, ['terser', 'uglify-js']);
+			} else {
+				$packages = array_merge($packages, ['uglify-js@2']);
+			}
+			$ret = $wrapper->node_do($nodeVersion, 'npm install --no-save -g ' . implode(' ', $packages));
+			if (!$ret['success']) {
+				return error('Failed to install preliminary packages: %s', $ret['error']);
+			}
+
+			$ret = $this->_exec($approot, 'nvm exec ' . $nodeVersion . ' npm run postinstall');
 
 			if (!$ret['success']) {
 				return error('Failed to install packages: %s', $ret['error']);
