@@ -12,6 +12,8 @@
 	 *  +------------------------------------------------------------+
 	 */
 
+	use Module\Support\Webapps\App\Type\Discourse\Launcher;
+	use Module\Support\Webapps\Passenger;
 	use Module\Support\Webapps\PathManager;
 	use Module\Support\Webapps\Traits\PublicRelocatable;
 	use Module\Support\Webapps\VersionFetcher\Github;
@@ -46,6 +48,8 @@
 			'2.5' => '14',
 			'2.6' => '15'
 		];
+
+
 
 		const APP_NAME = 'Discourse';
 		const DEFAULT_VERSION_LOCK = 'minor';
@@ -243,11 +247,13 @@
 				}
 				$wrapper->ruby_do('', $docroot, 'gem install -E --no-document passenger ' . $bundler);
 				$bundleFlags = '--deployment --without test development';
+
 				if (version_compare($args['version'], '2.5.0', '>=')) {
 					$wrapper->ruby_do('', $docroot, 'bundle config set deployment true');
 					$wrapper->ruby_do('', $docroot, 'bundle config set without "test development"');
 					$bundleFlags = '';
 				}
+
 				$wrapper->ruby_do('', $docroot, 'bundle install ' . $bundleFlags . ' -j' . max(4, (int)NPROC + 1));
 				# renice requires CAP_SYS_NICE, which Discourse doesn't catch
 				$wrapper->file_put_file_contents($wrapper->user_get_home() . '/.rbenv-usergems/' . $rubyVersion . '/bin/renice',
@@ -331,10 +337,10 @@
 				$this->node_make_default($nodeVersion, $approot);
 				$this->migrate($approot);
 				$this->assetsCompile($hostname, $path, 'production');
-				if (version_compare($opts['version'], '2.4.0', '<=')) {
+				if (version_compare($opts['version'], '2.4.0', '<')) {
 					$this->launchSidekiq($approot, 'production');
 
-					$passenger = \Module\Support\Webapps\Passenger::instantiateContexted($context, [$approot, 'ruby']);
+					$passenger = Passenger::instantiateContexted($context, [$approot, 'ruby']);
 					$passenger->createLayout();
 					$passenger->setEngine('standalone');
 					// avoid excessive mutex locking in Passenger
@@ -352,21 +358,9 @@
 						$passenger->getExecutableConfiguration());
 					$passenger->start();
 				} else {
-					$svc = \Opcenter\SiteConfiguration::shallow($this->getAuthContext());
-					$command = (string)(new \Opcenter\Provisioning\ConfigurationWriter('@webapp(discourse)::unicorn-launcher',
-						$svc))->compile([
-						'svc'      => $svc,
-						'afi'      => $this->getApnscpFunctionInterceptor(),
-						'port'     => $port = Port::firstFree($this->getAuthContext()),
-						'approot'  => $approot
-					]);
-
-					$wrapper->file_put_file_contents(
-						$approot . '/launch.sh',
-						$command
-					);
-
-					$this->file_chmod($approot . '/launch.sh', 755);
+					$handler = Launcher::instantiateContexted($context,
+						[$approot]);
+					$handler->create(Port::firstFree($this->getAuthContext()));
 				}
 			} catch (\apnscpException $e) {
 				dlog($e->getTraceAsString());
@@ -390,18 +384,18 @@
 			info("setting displayed name to `%s'", $username);
 
 			if (version_compare($opts['version'], '2.4.0', '>=')) {
-				$this->_exec($approot, './launch.sh');
-				$command = "$approot/launch.sh";
+				$launcher = Launcher::instantiateContexted($context, [$approot]);
+				$launcher->start();
+				$command = $launcher->getCommand();
 				$rules = 'RewriteEngine On' . "\n" .
 					'RewriteCond %{REQUEST_FILENAME} !-f' . "\n" .
-					'RewriteRule ^(.*)$ http://localhost:' . $port . '/$1 [P,L,QSA]' . "\n";
+					'RewriteRule ^(.*)$ http://localhost:' . $launcher->getPort() . '/$1 [P,L,QSA]' . "\n";
 			} else {
 				$command = $passenger->getExecutable();
 				$this->pman_run($command);
 				$rules = $passenger->getDirectives();
 			}
-
-			if (isset($passenger) && $passenger->getEngine() !== 'apache') {
+			if (!isset($passenger) || $passenger->getEngine() !== 'apache') {
 				$args = [
 					'@reboot',
 					null,
@@ -411,12 +405,12 @@
 					$command
 				];
 				if (!($wrapper->crontab_exists(...$args) || $wrapper->crontab_add_job(...$args))) {
-					warn('Failed to create job to start Passenger on boot. Command: %s', $command);
+					warn('Failed to create job to start Discourse on boot. Command: %s', $command);
 				}
 			}
 
+
 			if (!empty($opts['ssl'])) {
-				// @TODO make reconfigurable
 				$rules = 'RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}' . "\n" .
 					$rules;
 			}
@@ -553,8 +547,7 @@
 				$ini[$k] = $v;
 			}
 
-			return true;
-
+			return $ini->save();
 		}
 
 		/**
@@ -680,12 +673,12 @@
 
 		protected function sidekiqRunning(string $approot): ?int
 		{
-			$pidfile = $this->domain_fs_path($approot . '/tmp/sidekiq.pid');
-			if (!file_exists($pidfile)) {
+			$pidfile = $approot . '/tmp/sidekiq.pid';
+			if (!$this->file_exists($pidfile)) {
 				return null;
 			}
 
-			$pid = (int)file_get_contents($pidfile);
+			$pid = (int)$this->file_get_file_contents($pidfile);
 
 			return \Opcenter\Process::pidMatches($pid, 'ruby') ? $pid : null;
 		}
@@ -799,7 +792,7 @@
 			$context = null;
 
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($docroot, $context);
-			$passenger = \Module\Support\Webapps\Passenger::instantiateContexted($context, [$approot, 'ruby']);
+			$passenger = Passenger::instantiateContexted($context, [$approot, 'ruby']);
 			$passenger->createLayout();
 			$passenger->setEngine('standalone');
 			$command = $passenger->getExecutableConfiguration();
@@ -816,7 +809,7 @@
 				return false;
 			}
 			$user = $this->getDocrootUser($approot);
-			return \Module\Support\Webapps\Passenger::instantiateContexted(\Auth::context($user, $this->site),
+			return Passenger::instantiateContexted(\Auth::context($user, $this->site),
 				[$approot, 'ruby'])->restart();
 		}
 
