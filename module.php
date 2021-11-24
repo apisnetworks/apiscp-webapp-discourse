@@ -49,8 +49,6 @@
 			'2.6' => '15'
 		];
 
-
-
 		const APP_NAME = 'Discourse';
 		const DEFAULT_VERSION_LOCK = 'minor';
 		const DISCOURSE_REPO = 'https://github.com/discourse/discourse.git';
@@ -581,17 +579,21 @@
 		 */
 		private function migrate(string $approot, string $appenv = 'production'): bool
 		{
-			return $this->rake($approot, 'db:migrate', $appenv);
+			return $this->rake($approot, 'db:migrate', ['RAILS_ENV' => $appenv]);
 		}
 
-		private function rake(string $approot, string $task, string $appenv = 'production'): bool
+		private function rake(string $approot, string $task, array $env): bool
 		{
 			// https://github.com/nodejs/node/issues/25933
 			// as is soft, which allows raising to unlimited
-			$ret = $this->_exec($approot, 'ulimit -v unlimited ; rbenv exec bundle exec rake -j' . min(4, (int)NPROC + 1) . ' ' . $task, [
-				'PATH'      => getenv('PATH') . PATH_SEPARATOR . './node_modules/.bin' . PATH_SEPARATOR . '~/node_modules/.bin/',
-				'RAILS_ENV' => $appenv,
-			]);
+			$ret = $this->_exec(
+				$approot,
+				'ulimit -v unlimited ; nvm exec rbenv exec bundle exec rake -j' . min(4, (int)NPROC + 1) . ' ' . $task,
+				[
+					[],
+					$env
+				],
+			);
 
 			return $ret['success'] ?: error("failed Rake task `%s': %s", $task,
 				coalesce($ret['stderr'], $ret['stdout']));
@@ -610,7 +612,6 @@
 				1 => ['RAILS_ENV' => 'production'],
 				2 => []
 			];
-
 			$args = array_key_map(static function ($k, $v) use ($args) {
 				return ($args[$k] ?? []) + $v;
 			}, $baseArgs);
@@ -622,7 +623,6 @@
 				$user = $this->file_stat($path)['owner'] ?? $this->username;
 			}
 			$args[2]['user'] = $user;
-
 			$ret = $this->pman_run($cmd, ...$args);
 			if (!strncmp(coalesce($ret['stderr'], $ret['stdout']), 'Error:', strlen('Error:'))) {
 				// move stdout to stderr on error for consistency
@@ -660,13 +660,18 @@
 			if (!$this->crontab_exists(...$job)) {
 				$this->crontab_add_job(...$job);
 			}
-			$ret = $this->_exec($approot, $this->getSidekiqCommand($approot),
+			$ret = $this->_exec(
+				$approot,
+				$this->getSidekiqCommand($approot),
 				[
-					'approot' => $approot
-				],
-				[
-					'RAILS_ENV' => $mode
-				]);
+					[
+						'approot' => $approot
+					],
+					[
+						'RAILS_ENV' => $mode
+					]
+				]
+			);
 
 			return $ret['success'] ?: error('Failed to launch Sidekiq, check log/sidekiq.log');
 		}
@@ -739,13 +744,17 @@
 				return error('Failed to install preliminary packages: %s', $ret['error']);
 			}
 
-			$ret = $this->_exec($approot, 'nvm exec ' . $nodeVersion . ' npm run postinstall');
+			$ret = $this->_exec($approot, 'nvm exec ' . $nodeVersion . ' yarn install');
 
 			if (!$ret['success']) {
 				return error('Failed to install packages: %s', $ret['error']);
 			}
 			$this->fixupMaxMind($wrapper, $approot);
-			return $this->rake($approot, 'assets:clean', $appenv) && $this->rake($approot, 'assets:precompile', $appenv);
+			$env = [
+				'RAILS_ENV' => $appenv,
+				'NODE_VERSION' => $nodeVersion
+			];
+			return $this->rake($approot, 'assets:clean', $env) && $this->rake($approot, 'assets:precompile', $env);
 		}
 
 		/**
