@@ -1126,7 +1126,22 @@
 
 			$minVersion = \Opcenter\Versioning::satisfy($discourseVersion, self::MINIMUM_INTERPRETERS);
 
-			return version_compare($version, $minVersion, '>=');
+			if (version_compare($version, $minVersion, '>=')) {
+				return true;
+			}
+
+			// can we upgrade?
+			foreach ($wrapper->ruby_list() as $version) {
+				if (version_compare($version, $minVersion, '>=')) {
+					info("Changed default Ruby interpreter to `%(version)s' on `%(path)s'", [
+						'version' => $version, 'path' => $approot
+					]);
+					$wrapper->ruby_make_default($version, $approot);
+					return true;
+				}
+			}
+
+			return false;
 		}
 
 		/**
