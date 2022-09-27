@@ -219,7 +219,9 @@
 			}
 
 			$rubyVersion = \Opcenter\Versioning::satisfy($opts['version'], self::MINIMUM_INTERPRETERS);
-			$this->validateRuby($rubyVersion, $opts['user'] ?? null);
+			if (!($rubyVersion = $this->validateRuby($rubyVersion, $opts['user'] ?? null))) {
+				return false;
+			}
 
 			$args['version'] = $opts['version'];
 			$db = \Module\Support\Webapps\DatabaseGenerator::pgsql($this->getAuthContext(), $hostname);
@@ -244,12 +246,13 @@
 				if (version_compare($args['version'], '2.3.8', '>=')) {
 					$bundler = 'bundler:"~> 2"';
 				}
-				$wrapper->ruby_do('', $docroot, 'gem install -E --no-document passenger ' . $bundler);
+				$wrapper->ruby_do($rubyVersion, $docroot, 'gem install -E --no-document passenger ' . $bundler);
+
 				$bundleFlags = '--deployment --without test development';
 
 				if (version_compare($args['version'], '2.5.0', '>=')) {
-					$wrapper->ruby_do('', $docroot, 'bundle config set deployment true');
-					$wrapper->ruby_do('', $docroot, 'bundle config set without "test development"');
+					$wrapper->ruby_do($rubyVersion, $docroot, 'bundle config set deployment true');
+					$wrapper->ruby_do($rubyVersion, $docroot, 'bundle config set without "test development"');
 					$bundleFlags = '';
 				}
 
@@ -269,6 +272,7 @@
 					warn("Task scheduling enabled for user `%s'", $opts['user'] ?? $this->username);
 				}
 			} catch (\apnscpException $e) {
+				print_r($e);
 				info('removing temporary files');
 				$this->file_delete($docroot, true);
 				$db->rollback();
@@ -313,18 +317,13 @@
 			$wrapper->redis_create($this->domain, ['requirepass' => $redispass]);
 			$redisconfig = $wrapper->redis_config($this->domain);
 
-			$config = \Opcenter\Map::write($this->domain_fs_path("${approot}/config/discourse.conf"),
-				'inifile')->section(null);
 			$vars = [
 				'redis_port'     => $redisconfig['port'],
 				'redis_host'     => '127.0.0.1',
 				'redis_password' => $redisconfig['requirepass'],
 				'db_pool'        => 7
 			];
-			foreach ($vars as $k => $v) {
-				$config[$k] = $v;
-			}
-			unset($config);
+			$this->set_configuration($hostname, $path, $vars);
 
 			/**
 			 * Sidekiq + DB migration + asset generation
@@ -449,9 +448,9 @@
 		 *
 		 * @param string|null $version optional version to compare against
 		 * @param string|null $user
-		 * @return bool
+		 * @return string|null
 		 */
-		protected function validateRuby(string $version = 'lts', string $user = null): bool
+		protected function validateRuby(string $version = 'lts', string $user = null): ?string
 		{
 			debug("Validating Ruby %s installed", $version);
 			if ($user) {
@@ -459,20 +458,27 @@
 			}
 			$wrapper = $afi ?? $this;
 			// @TODO accept newer Rubies if present
-			if (!$wrapper->ruby_installed($version) && !$wrapper->ruby_install($version)) {
-				return error('failed to install Ruby %s', $version);
+
+			if (!($exists = $wrapper->ruby_installed($version, '>=')) && ($exists || !$wrapper->ruby_install($version))) {
+				error('failed to install Ruby %s', $version);
+				return null;
 			}
-			$ret = $wrapper->ruby_do($version, null, 'gem install --no-document -E passenger rake');
+			debug("Ruby %(found)s satisfies request %(wanted)s", ['found' => $exists, 'wanted' => $version]);
+			// update version with satisficier
+			$version = $exists;
+			$ret = $wrapper->ruby_do($version, null, 'gem install --no-document -E passenger');
 			if (!$ret['success']) {
-				return error('failed to install Passenger gem: %s', $ret['stderr'] ?? 'UNKNOWN ERROR');
+				error('failed to install Passenger gem: %s', $ret['stderr'] ?? 'UNKNOWN ERROR');
+				return null;
 			}
 			$home = $this->user_get_home($user);
 			$stat = $this->file_stat($home);
 			if (!$stat || !$this->file_chmod($home, decoct($stat['permissions']) | 0001)) {
-				return error("failed to query user home directory `%s' for user `%s'", $home, $user);
+				error("failed to query user home directory `%s' for user `%s'", $home, $user);
+				return null;
 			}
 
-			return true;
+			return $version;
 		}
 
 		/**
@@ -529,6 +535,11 @@
 			}
 			$config = $this->getAppRoot($hostname, $path) . '/config/discourse.conf';
 			$ini = \Opcenter\Map::load($this->domain_fs_path($config), 'wd', 'inifile')->section(null);
+			clearstatcache(true, $this->domain_fs_path($config));
+			if (!str_starts_with(realpath($this->domain_fs_path($config)), $this->domain_fs_path('/'))) {
+				$ini->close();
+				fatal("Unsafe path");
+			}
 
 			foreach ($params as $k => $v) {
 				$ini[$k] = $v;
@@ -946,22 +957,26 @@
 			if (isset($fields['name'])) {
 				$fields['name'] = $fields['name'];
 			}
-			$db = $this->connectDB($hostname, $path);
+
+			if (!$db = $this->connectDB($hostname, $path)) {
+				return false;
+			}
+
 			if (!empty($fields['email'])) {
 				if (!preg_match(Regex::EMAIL, $fields['email'])) {
 					return error("Invalid email address `%s'", $fields['email']);
 				}
-				$db->query('UPDATE user_emails SET email = ' . pg_escape_literal($fields['email']) . " WHERE user_id = 1 AND \"primary\" = 't'");
+				$db->query('UPDATE user_emails SET email = ' . $db->quote($fields['email']) . " WHERE user_id = 1 AND \"primary\" = 't'");
 			}
 			$q = 'UPDATE users SET id = id';
 			foreach (['password_hash', 'salt', 'username', 'username_lower', 'name'] as $field) {
 				if (!isset($fields[$field])) {
 					continue;
 				}
-				$q .= ", {$field} = '" . $db->escape_string($fields[$field]) . "'";
+				$q .= ", {$field} = '" . $db->quote($fields[$field]) . "'";
 			}
 			$q .= ' WHERE id = 1';
-			if (false === $db->query($q) || $db->affected_rows() < 1) {
+			if (!$db->exec($q)) {
 				return error("Failed to change admin user `%s'", $admin);
 			}
 			if (isset($fields['email'])) {
@@ -988,11 +1003,11 @@
 			}
 
 			$rs = $pgsql->query('SELECT username FROM users WHERE id = 1');
-			if (!$rs || $rs->num_rows() < 1) {
+			if (!$rs || $rs->rowCount() < 1) {
 				return null;
 			}
 
-			return $rs->fetch_object()->username;
+			return $rs->fetchObject()->username;
 		}
 
 		/**
@@ -1251,34 +1266,34 @@
 			if (!$db = $this->connectDB($hostname, $path)) {
 				return error('Failed to connect to Discourse database');
 			}
-			if ($db->query('SELECT FROM users WHERE id = 1')->num_rows() > 0) {
+			if ($db->query('SELECT FROM users WHERE id = 1')->rowCount() > 0) {
 				return warn('Admin user (id = 1) already present, not creating');
 			}
 			$hash = hash('sha256', (string)random_int(PHP_INT_MIN, PHP_INT_MAX));
-			$q1 = 'INSERT INTO users (id, admin, created_at, updated_at, trust_level, username, username_lower, password_hash, salt, ip_address) VALUES(1, \'t\', NOW(), NOW(), 1, ' .
-				pg_escape_literal($this->username) . ',' .
-				strtolower(pg_escape_literal($this->username)) . ',' .
-				pg_escape_literal(hash_hmac('sha256', (string)random_int(PHP_INT_MIN, PHP_INT_MAX), $hash)) . ',' .
-				pg_escape_literal(substr($hash, 0, 32)) . ', ' . pg_escape_literal(\Auth::client_ip()) . ')';
-			$q2 = 'INSERT INTO user_emails (id, user_id, created_at, updated_at, email, "primary") VALUES(1, 1, NOW(), NOW(), ' . pg_escape_literal($this->common_get_email()) . ', \'t\')';
+			$sth = $db->prepare('INSERT INTO users (id, admin, created_at, updated_at, trust_level, username, username_lower, password_hash, salt, ip_address) VALUES(1, \'t\', NOW(), NOW(), 1, :user, LOWER(:user), :hash, :salt, :ip);');
+			$r1 = $sth->execute([
+				'user' => $this->username,
+				'hash' => hash_hmac('sha256', (string)random_int(PHP_INT_MIN, PHP_INT_MAX), $hash),
+				'salt' => substr($hash, 0, 32),
+				'ip'   => \Auth::client_ip()
+			]);
+			$sth = $db->prepare('INSERT INTO user_emails (id, user_id, created_at, updated_at, email, "primary") VALUES(1, 1, NOW(), NOW(), :email, \'t\')');
 
-			// @todo PDO
-			return $db->query($q1)->affected_rows() && $db->query($q2)->affected_rows();
-
-
+			return $r1 && $sth->execute(['email' => $this->common_get_email()]);
 		}
 
-		private function connectDB($hostname, $path): ?PostgreSQL
+		private function connectDB(string $hostname, string $path): ?PDO
 		{
 			$dbconfig = $this->db_config($hostname, $path);
-			$host = $dbconfig['host'] === 'localhost.localdomain' ? '127.0.0.1' : $dbconfig['host'];
 			if (empty($dbconfig['user'])) {
 				return null;
 			}
 
-			return \PostgreSQL::stub()->connect($host, $dbconfig['user'], $dbconfig['password'],
-				$dbconfig['db']) ?: null;
-
+			try {
+				return \Module\Support\Webapps::connectorFromCredentials($dbconfig);
+			} catch (PDOException $e) {
+				return null;
+			}
 		}
 
 		/**
