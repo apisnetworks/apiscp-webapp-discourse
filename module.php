@@ -256,6 +256,10 @@
 					$bundleFlags = '';
 				}
 
+				if (version_compare($args['version'], '2.8.10', '>=')) {
+					$wrapper->ruby_do($rubyVersion, $docroot, 'gem update --system --no-doc');
+				}
+
 				$wrapper->ruby_do('', $docroot, 'bundle install ' . $bundleFlags . ' -j' . max(4, (int)NPROC + 1));
 				# renice requires CAP_SYS_NICE, which Discourse doesn't catch
 				$wrapper->file_put_file_contents($wrapper->user_get_home() . '/.rbenv-usergems/' . $rubyVersion . '/bin/renice',
@@ -273,6 +277,9 @@
 				}
 			} catch (\apnscpException $e) {
 				print_r($e);
+				if (array_get($opts, 'hold')) {
+					return false;
+				}
 				info('removing temporary files');
 				$this->file_delete($docroot, true);
 				$db->rollback();
@@ -459,13 +466,17 @@
 			$wrapper = $afi ?? $this;
 			// @TODO accept newer Rubies if present
 
-			if (!($exists = $wrapper->ruby_installed($version, '>=')) && ($exists || !$wrapper->ruby_install($version))) {
-				error('failed to install Ruby %s', $version);
-				return null;
+			if (!$exists = $wrapper->ruby_installed($version, '>=')) {
+				if (!$version = $wrapper->ruby_install(\Opcenter\Versioning::asMinor($version))) {
+					error('failed to install Ruby %s', $version);
+					return null;
+				}
+			} else {
+				debug("Ruby %(found)s satisfies request %(wanted)s", ['found' => $exists, 'wanted' => $version]);
+				// update version with satisficier
+				$version = $exists;
 			}
-			debug("Ruby %(found)s satisfies request %(wanted)s", ['found' => $exists, 'wanted' => $version]);
-			// update version with satisficier
-			$version = $exists;
+
 			$ret = $wrapper->ruby_do($version, null, 'gem install --no-document -E passenger');
 			if (!$ret['success']) {
 				error('failed to install Passenger gem: %s', $ret['stderr'] ?? 'UNKNOWN ERROR');
@@ -1059,11 +1070,14 @@
 					'failed' => true
 				]);
 
-				return error("Configured Ruby version `%s' does not meet minimum requirement `%s' for Discourse v%s",
-					$wrapper->ruby_version_from_path($approot), $minimum, $version
-				);
+				return error("Configured Ruby version `%(found)s' does not meet minimum requirement `%(min)s' for Discourse v%(discourse_ver)s", [
+					'found' => $wrapper->ruby_version_from_path($approot),
+					'min' => $minimum,
+					'discourse_ver' => $version
+				]);
 			}
 
+			$oldversion = $wrapper->discourse_get_version($hostname, $path);
 			$wrapper->git_fetch($approot);
 			$wrapper->git_fetch($approot, ['tags' => null]);
 			if ($wrapper->file_exists($approot . '/lib/discourse_ip_info.rb')) {
@@ -1072,6 +1086,12 @@
 
 			$ret = $wrapper->git_checkout($approot, "v${version}");
 			$this->applyPatches($wrapper, $approot, $version);
+
+			// uri updates to 0.11.0
+			if (version_compare($version, '2.8.10', '>=') && version_compare($oldversion, '2.8.10', '<')) {
+				$wrapper->ruby_do(null, $approot, 'gem update --system --no-doc');
+			}
+
 			if ($ret) {
 				// use default Ruby wrapper
 				$wrapper->ruby_do('', $approot, 'bundle install -j' . min(4, (int)NPROC + 1));
