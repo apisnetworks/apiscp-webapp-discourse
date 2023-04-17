@@ -276,7 +276,6 @@
 					warn("Task scheduling enabled for user `%s'", $opts['user'] ?? $this->username);
 				}
 			} catch (\apnscpException $e) {
-				print_r($e);
 				if (array_get($opts, 'hold')) {
 					return false;
 				}
