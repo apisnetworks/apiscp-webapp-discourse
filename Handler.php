@@ -14,6 +14,7 @@
 	namespace Module\Support\Webapps\App\Type\Discourse;
 
 	use Module\Support\Webapps\App\Type\Passenger\Handler as Passenger;
+	use Opcenter\Versioning;
 
 	class Handler extends Passenger
 	{
@@ -28,5 +29,14 @@
 		public function changePassword(string $password): bool
 		{
 			return $this->discourse_change_admin($this->hostname, $this->path, array('password' => $password));
+		}
+
+		public function getInstallableVersions(): array
+		{
+			$hasRedis6 = version_compare($this->redis_version(), '6.2', '>=');
+			return array_filter(
+				$this->discourse_get_versions(),
+				static fn ($version) => Versioning::asMajor($version) < 3 || $hasRedis6
+			);
 		}
 	}

@@ -37,7 +37,8 @@
 			'0'           => '2.4.2',
 			'2.2.0.beta5' => '2.5.2',
 			'2.5.0'       => '2.6.5',
-			'2.6.0'       => '2.7.2'
+			'2.6.0'       => '2.7.2',
+			'3.0.0'       => '3.1.3'
 		];
 
 		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
@@ -175,16 +176,14 @@
 					$limit);
 			}
 
-			if (!$this->ssh_enabled()) {
-				return error('Discourse requires ssh service to be enabled');
-			}
-
 			if (!$this->crontab_permitted()) {
-				return error('Task scheduling not enabled for account - admin must enable crontab,permit');
+				return error('%(app)s requires %(service)s service to be enabled', [
+					'app' => self::APP_NAME, 'service' => 'crontab'
+				]);
 			}
 
-			if (!$this->crontab_enabled() && !$this->crontab_toggle_status(1)) {
-				return error('Failed to enable task scheudling');
+			if (!$this->crontab_enabled() && !$this->crontab_start()) {
+				return error('Failed to enable task scheduling');
 			}
 
 			if (empty($opts['maxmind'])) {
@@ -339,8 +338,8 @@
 
 				$nodeVersion = $this->validateNode((string)$opts['version'], $wrapper);
 				$this->node_make_default($nodeVersion, $approot);
-				$this->migrate($approot);
 				$this->assetsCompile($hostname, $path, 'production');
+				$this->migrate($approot);
 				if (version_compare($opts['version'], '2.4.0', '<')) {
 					$this->launchSidekiq($approot, 'production');
 
@@ -423,7 +422,6 @@
 				['app' => static::APP_NAME, 'email' => $opts['email']]);
 		}
 
-
 		/**
 		 * Additional version checks
 		 *
@@ -436,14 +434,24 @@
 				return false;
 			}
 			$version = array_get($options, 'version');
-			if (!version_compare($version, '2.4.0.alpha0', '>=')) {
-				return true;
-			}
 
 			// Requires Redis 4.0 by Sidekiq 6 compat
-			$meta = \CLI\Yum\Synchronizer\Utils::getMetaFromPackage('redis');
-			if (version_compare('4.0.0', $meta['version'], '>=')) {
-				return error('Discourse 2.4.0+ requires Redis 4. %s installed in FST', $meta['version']);
+			$redisVersion = $this->redis_version();
+			foreach(['2.4.0' => '4.0.0', '3.0.0' => '6.2.0'] as $discourseVersion => $redisReq) {
+				if (version_compare($version, $discourseVersion, '<')) {
+					return true;
+				}
+
+				if (version_compare($redisVersion, $redisReq, '<')) {
+					return error('%(app)s %(version)s+ requires %(pkgname)s %(pkgver)s+. ' .
+						'%(pkgname)s %(pkginstver)s installed in FST', [
+						'app' => self::APP_NAME,
+						'version' => $version,
+						'pkgname' => 'Redis',
+						'pkgver' => $redisReq,
+						'pkginstver' => $redisVersion
+					]);
+				}
 			}
 
 			return true;
@@ -575,6 +583,8 @@
 			$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method.patch';
 			if (version_compare('2.8.0', $version, '<=')) {
 				$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method-2.8.patch';
+			} else if (version_compare('3.0.0', $version, '<=')) {
+				$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method-3.0.patch';
 			}
 			$path = PathManager::storehouse('discourse') . $patch;
 			$wrapper->file_put_file_contents($approot . '/0001.patch', file_get_contents($path));
