@@ -116,7 +116,7 @@
 				return $this->query('discourse_get_configuration', $hostname, $path, $fields);
 			}
 			$config = $this->getAppRoot($hostname, $path) . '/config/discourse.conf';
-			$map = \Opcenter\Map::read($this->domain_fs_path($config), 'inifile');
+			$map = \Opcenter\Map::read($this->domain_fs_path($config), 'inifile')->section(null);
 			$values = [];
 			foreach ((array)$fields as $k) {
 				$values[$k] = $map->fetch($k);
@@ -312,7 +312,12 @@
 				'maxmind_license_key' => $opts['maxmind']
 			];
 
+
 			$this->set_configuration($hostname, $path, $configurables);
+
+			if (version_compare($args['version'], '3.0.0', '>=')) {
+				$this->createMailUser($hostname, $path);
+			}
 
 			$redispass = \Opcenter\Auth\Password::generate(32);
 			if ($wrapper->redis_exists($this->domain)) {
@@ -420,6 +425,68 @@
 
 			return info('%(app)s installed - confirmation email with login info sent to %(email)s',
 				['app' => static::APP_NAME, 'email' => $opts['email']]);
+		}
+
+		/**
+		 * Create unprivileged mail relay user
+		 *
+		 * Required for v3.0.0, SMTP provider changed to net-smtp
+		 *
+		 * @param string $hostname
+		 * @param string $path
+		 * @return void
+		 */
+		private function createMailUser(string $hostname, string $path = ''): void
+		{
+			if (version_compare($this->get_version($hostname, $path), '3.0.0', '<')) {
+				return;
+			}
+			if (!$this->email_enabled()) {
+				warn("Mail disabled on account. Manual SMTP configuration required to config/discourse.conf");
+				return;
+			}
+
+			$cfg = $this->get_configuration($hostname, $path, ['smtp_user_name', 'smtp_address']);
+			if (array_get($cfg, 'smtp_address') && $cfg['smtp_user_name']) {
+				return;
+			}
+
+			$user = 'discourse-' . \Opcenter\Auth\Password::generate(8, 'a-z');
+			$password = \Opcenter\Auth\Password::generate(16);
+			if (!$this->user_add($user, $password, 'Discourse email user - ' . $hostname, 0, [
+				'smtp'  => true,
+				'cp'    => false,
+				'ssh'   => false,
+				'ftp'   => false,
+				'imap'  => false
+			]))
+			{
+				warn("Failed to create SMTP user for Discourse. Manual configuration of SMTP required");
+				return;
+			}
+			$this->set_configuration($hostname, $path, [
+				'smtp_user_name' => "$user@$hostname",
+				'smtp_password'  => $password,
+				'smtp_address'   => 'localhost',
+				'smtp_port'      => 587,
+				'smtp_enable_start_tls' => 'false',
+			]);
+
+
+		}
+
+		private function deleteMailUser(string $hostname, string $path = ''): void
+		{
+			$cfg = $this->get_configuration($hostname, $path, ['smtp_user_name', 'smtp_address']);
+			if (array_get($cfg, 'smtp_address') !== 'localhost' || !str_contains($cfg['smtp_user_name'], "@$hostname")) {
+				return;
+			}
+
+			$user = strtok($cfg['smtp_user_name'], '@');
+			if (!($pwd = $this->user_getpwnam($user)) || !str_starts_with($pwd['gecos'], "Discourse email user")) {
+				return;
+			}
+			$this->user_delete($user, true);
 		}
 
 		/**
@@ -576,19 +643,20 @@
 		 */
 		private function applyPatches(\apnscpFunctionInterceptor $wrapper, string $approot, string $version): void
 		{
-			if (version_compare('2.5.0', $version, '>=') && version_compare('2.8.0', $version, '>')) {
+			if (version_compare('2.5.0', $version, '>')) {
 				return;
 			}
 
 			$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method.patch';
-			if (version_compare('2.8.0', $version, '<=')) {
-				$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method-2.8.patch';
-			} else if (version_compare('3.0.0', $version, '<=')) {
+			if (version_compare('3.0.0', $version, '<=')) {
 				$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method-3.0.patch';
+			} else if (version_compare('2.8.0', $version, '<=')) {
+				$patch = '/0001-Rack-Lint-InputWrapper-lacks-size-method-2.8.patch';
 			}
 			$path = PathManager::storehouse('discourse') . $patch;
 			$wrapper->file_put_file_contents($approot . '/0001.patch', file_get_contents($path));
 			$ret = $wrapper->pman_run('cd %s && (git apply 0001.patch ; rm -f 0001.patch)', $approot);
+
 			if (!$ret['success']) {
 				warn("Failed to apply Rack input patch: %s", $ret['stderr']);
 			}
@@ -890,9 +958,11 @@
 					$this->pman_run('cd %(approot)s && /bin/bash -ic %(cmd)s',
 						['approot' => $approot, 'cmd' => 'rbenv exec passenger stop']);
 				}
+
 				if ($this->redis_exists($hostname)) {
 					$this->redis_delete($hostname);
 				}
+
 				$this->killSidekiq($approot);
 				foreach ($this->crontab_filter_by_command($approot) as $job) {
 					$this->crontab_delete_job(
@@ -907,6 +977,7 @@
 
 				return true;
 			}
+			$this->deleteMailUser($hostname, $path);
 
 			return parent::uninstall($hostname, $path, $delete);
 		}
@@ -1120,6 +1191,10 @@
 
 			if (!$ret) {
 				return error('failed to update Discourse');
+			}
+
+			if (version_compare($version, '3.0.0', '>=')) {
+				$this->createMailUser($hostname, $path);
 			}
 
 			return $this->restart($hostname, $path);
