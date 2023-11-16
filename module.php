@@ -38,7 +38,7 @@
 			'2.2.0.beta5' => '2.5.2',
 			'2.5.0'       => '2.6.5',
 			'2.6.0'       => '2.7.2',
-			'3.0.0'       => '3.1.3'
+			'3.1.0'       => '3.2.0'
 		];
 
 		// via https://github.com/discourse/discourse_docker/blob/master/image/base/Dockerfile#L29
@@ -1439,5 +1439,3 @@
 			];
 		}
 	}
-
-
