@@ -655,7 +655,7 @@
 			}
 			$path = PathManager::storehouse('discourse') . $patch;
 			$wrapper->file_put_file_contents($approot . '/0001.patch', file_get_contents($path));
-			$ret = $wrapper->pman_run('cd %s && (git apply 0001.patch ; rm -f 0001.patch)', $approot);
+			$ret = $wrapper->pman_run('cd %s && (git apply 0001.patch ; rm -f 0001.patch)', [$approot]);
 
 			if (!$ret['success']) {
 				warn("Failed to apply Rack input patch: %s", $ret['stderr']);
@@ -678,9 +678,11 @@
 		{
 			// https://github.com/nodejs/node/issues/25933
 			// as is soft, which allows raising to unlimited
+
+			// note: can fail if .bashrc lacks /etc/bashrc source
 			$ret = $this->_exec(
 				$approot,
-				'ulimit -v unlimited ; nvm exec rbenv exec bundle exec rake -j' . min(4, (int)NPROC + 1) . ' ' . $task,
+				"ulimit -v unlimited ; nvm exec /bin/bash -ic 'rbenv exec bundle exec rake -j" . min(4, (int)NPROC + 1) . " $task'",
 				[
 					[],
 					$env
