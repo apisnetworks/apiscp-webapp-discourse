@@ -265,7 +265,11 @@
 					"#!/bin/sh\nexec /bin/true");
 				$wrapper->file_chmod($wrapper->user_get_home() . '/.rbenv-usergems/' . $rubyVersion . '/bin/renice', 755);
 				$this->applyPatches($wrapper, $docroot, $args['version']);
-				foreach (['pg_trgm', 'hstore'] as $extension) {
+				$extensions = ['pg_trgm', 'hstore'];
+				if (version_compare($args['version'], '3.0', '>=')) {
+					$extensions[] = 'unaccent';
+				}
+				foreach ($extensions as $extension) {
 					$this->pgsql_add_extension($db->database, $extension);
 				}
 				if (!$wrapper->crontab_user_permitted($opts['user'] ?? $this->username)) {
@@ -1131,9 +1135,10 @@
 				return error('update failed');
 			}
 
+			$oldVersion = $this->get_version($hostname, $path);
 			if (!$version) {
 				$version = \Opcenter\Versioning::nextVersion($this->get_versions(),
-					$this->get_version($hostname, $path));
+					$oldVersion);
 			} else if (!\Opcenter\Versioning::valid($version)) {
 				return error('invalid version number, %s', $version);
 			}
@@ -1144,6 +1149,10 @@
 				]);
 
 				return error('Cannot upgrade Discourse - not a valid git repository');
+			}
+
+			if (version_compare($oldVersion, '3.0', '<') && version_compare($version, '3.0', '>=')) {
+				$this->pgsql_add_extension($this->db_config($hostname, $path)['db'], 'unaccent');
 			}
 			$wrapper = $this->getApnscpFunctionInterceptorFromDocroot($approot);
 			$minimum = null;
@@ -1159,7 +1168,6 @@
 				]);
 			}
 
-			$oldversion = $wrapper->discourse_get_version($hostname, $path);
 			$wrapper->git_fetch($approot);
 			$wrapper->git_fetch($approot, ['tags' => null]);
 			if ($wrapper->file_exists($approot . '/lib/discourse_ip_info.rb')) {
@@ -1170,17 +1178,18 @@
 			$this->applyPatches($wrapper, $approot, $version);
 
 			// uri updates to 0.11.0
-			if (version_compare($version, '2.8.10', '>=') && version_compare($oldversion, '2.8.10', '<')) {
+			if (version_compare($version, '2.8.10', '>=') && version_compare($oldVersion, '2.8.10', '<')) {
 				$wrapper->ruby_do(null, $approot, 'gem update --system --no-doc');
 			}
 
 			if ($ret) {
 				// use default Ruby wrapper
 				$wrapper->ruby_do('', $approot, 'bundle install -j' . min(4, (int)NPROC + 1));
+				$this->migrate($approot);
+				$this->update_plugins($hostname, $path);
 				if (!$this->assetsCompile($hostname, $path)) {
 					warn('Failed to compile assets');
 				}
-				$this->migrate($approot);
 			}
 
 			if ($version !== ($newver = $this->get_version($hostname, $path))) {
@@ -1275,7 +1284,10 @@
 		 */
 		public function update_plugins(string $hostname, string $path = '', array $plugins = array()): bool
 		{
-			return error('not implemented');
+			if (!$approot = $this->getAppRoot($hostname, $path)) {
+				return false;
+			}
+			return $this->rake($approot, 'plugin:pull_compatible_all', ['LOAD_PLUGINS' => 0, 'RAILS_ENV' => 'production']);
 		}
 
 		/**
