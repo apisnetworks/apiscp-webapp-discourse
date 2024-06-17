@@ -38,6 +38,7 @@
 			'2.2.0.beta5' => '2.5.2',
 			'2.5.0'       => '2.6.5',
 			'2.6.0'       => '2.7.2',
+			'3.0.0'       => '3.1.3',
 			'3.1.0'       => '3.2.0'
 		];
 
@@ -116,6 +117,13 @@
 				return $this->query('discourse_get_configuration', $hostname, $path, $fields);
 			}
 			$config = $this->getAppRoot($hostname, $path) . '/config/discourse.conf';
+			$stat = $this->file_stat($config);
+
+			if (!$stat['can_read']) {
+				error("Path %(path)s unreadable", ['path' => $config]);
+				return [];
+			}
+
 			$map = \Opcenter\Map::read($this->domain_fs_path($config), 'inifile')->section(null);
 			$values = [];
 			foreach ((array)$fields as $k) {
@@ -186,7 +194,7 @@
 				return error('Failed to enable task scheduling');
 			}
 
-			if (empty($opts['maxmind'])) {
+			if (!empty($opts['maxmind']) && !ctype_alnum($opts['maxmind'])) {
 				return error('A MaxMind GeoLite2 key is required.');
 			}
 
@@ -207,7 +215,6 @@
 			if ($path) {
 				return error('Discourse may only be installed directly on a subdomain or domain without a child path, e.g. https://discourse.domain.com but not https://domain.com/discourse');
 			}
-
 
 			if (!($docroot = $this->getDocumentRoot($hostname, $path))) {
 				return error("failed to normalize path for `%s'", $hostname);
@@ -243,7 +250,10 @@
 				$this->ruby_make_default($rubyVersion, $docroot);
 				$bundler = 'bundler:"< 2"';
 				if (version_compare($args['version'], '2.3.8', '>=')) {
-					$bundler = 'bundler:"~> 2"';
+					$bundler = 'bundler:"~> 2.2"';
+					if (version_compare($args['version'], '3.1.0', '<')) {
+						$bundler = 'bundler:"<= 2.4.22"';
+					}
 				}
 				$wrapper->ruby_do($rubyVersion, $docroot, 'gem install -E --no-document passenger ' . $bundler);
 
@@ -255,8 +265,8 @@
 					$bundleFlags = '';
 				}
 
-				if (version_compare($args['version'], '2.8.10', '>=')) {
-					$wrapper->ruby_do($rubyVersion, $docroot, 'gem update --system --no-doc');
+				if (version_compare($args['version'], '2.8.10', '>=') && version_compare($rubyVersion, '3.1.3', '<')) {
+					$wrapper->ruby_do($rubyVersion, $docroot, 'gem update --system 3.2.28 --no-doc');
 				}
 
 				$wrapper->ruby_do('', $docroot, 'bundle install ' . $bundleFlags . ' -j' . max(4, (int)NPROC + 1));
@@ -300,7 +310,6 @@
 
 			$docroot = $this->getDocumentRoot($hostname, $path);
 			$approot = $this->getAppRoot($hostname, $path);
-			$this->initializeMeta($docroot, $opts);
 
 			$config = $approot . '/config/discourse.conf';
 			$wrapper->file_copy($approot . '/config/discourse_defaults.conf', $config);
@@ -312,9 +321,12 @@
 				'hostname'           => $hostname,
 				'db_host'            => $db->hostname,
 				'developer_emails'   => $opts['email'],
-				'load_mini_profiler' => false,
-				'maxmind_license_key' => $opts['maxmind']
+				'load_mini_profiler' => false
 			];
+
+			if (!empty($opts['maxmind'])) {
+				$configurables['maxmind_license_key'] = $opts['maxmind'];
+			}
 
 
 			$this->set_configuration($hostname, $path, $configurables);
@@ -344,7 +356,6 @@
 			 */
 			$exold = \Error_Reporter::exception_upgrade();
 			try {
-
 				$nodeVersion = $this->validateNode((string)$opts['version'], $wrapper);
 				$this->node_make_default($nodeVersion, $approot);
 				$this->assetsCompile($hostname, $path, 'production');
@@ -623,6 +634,11 @@
 				return $this->query('discourse_set_configuration', $hostname, $path, $params);
 			}
 			$config = $this->getAppRoot($hostname, $path) . '/config/discourse.conf';
+			$stat = $this->file_stat($config);
+			if ($stat && !$stat['can_write']) {
+				return error("Path %(path)s unreadable", ['path' => $config]);
+			}
+
 			$ini = \Opcenter\Map::load($this->domain_fs_path($config), 'wd', 'inifile')->section(null);
 			clearstatcache(true, $this->domain_fs_path($config));
 			if (!str_starts_with(realpath($this->domain_fs_path($config)), $this->domain_fs_path('/'))) {
@@ -837,7 +853,7 @@
 			} else {
 				$packages = array_merge($packages, ['uglify-js@2']);
 			}
-			$ret = $wrapper->node_do($nodeVersion, 'npm install --no-save -g ' . implode(' ', $packages));
+			$ret = $wrapper->node_do($nodeVersion, null, 'npm install --no-save -g ' . implode(' ', $packages));
 			if (!$ret['success']) {
 				return error('Failed to install preliminary packages: %s', $ret['error']);
 			}
