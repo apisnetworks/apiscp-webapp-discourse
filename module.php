@@ -435,7 +435,6 @@
 			)) {
 				return error('failed to create .htaccess control - Discourse is not properly setup');
 			}
-			$this->initializeMeta($docroot, $opts + ['type' => 'discourse']);
 			$this->notifyInstalled($hostname, $path, $opts);
 
 			return info('%(app)s installed - confirmation email with login info sent to %(email)s',
