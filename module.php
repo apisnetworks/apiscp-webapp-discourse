@@ -49,7 +49,8 @@
 			'2.4' => '10',
 			'2.5' => '14',
 			'2.6' => '15',
-			'2.8' => '16'
+			'2.8' => '16',
+			'3.2' => '18'
 		];
 
 		const APP_NAME = 'Discourse';
@@ -1184,7 +1185,7 @@
 			}
 
 			$wrapper->git_fetch($approot);
-			$wrapper->git_fetch($approot, ['tags' => null]);
+			$wrapper->git_fetch($approot, ['tags' => null, 'force' => null]);
 			if ($wrapper->file_exists($approot . '/lib/discourse_ip_info.rb')) {
 				$wrapper->git_checkout($approot, null, ['lib/discourse_ip_info.rb']);
 			}
