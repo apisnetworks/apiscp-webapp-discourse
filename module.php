@@ -1208,7 +1208,7 @@
 				}
 			}
 
-			if ($version !== ($newver = $this->get_version($hostname, $path))) {
+			if (!\Opcenter\Versioning::compare($version, $newver = $this->get_version($hostname, $path))) {
 				report("Upgrade failed, reported version `%s' is not requested version `%s'", $newver, $version);
 			}
 			parent::setInfo($this->getDocumentRoot($hostname, $path), [
