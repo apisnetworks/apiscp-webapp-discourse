@@ -900,7 +900,7 @@
 		 */
 		private function fixupMaxMind(apnscpFunctionInterceptor $wrapper, string $approot): bool
 		{
-			$path = "${approot}/lib/discourse_ip_info.rb";
+			$path = "{$approot}/lib/discourse_ip_info.rb";
 			$template = file_get_contents(resource_path('storehouse/discourse/discourse_ip_info.rb'));
 			return $wrapper->file_put_file_contents($path, $template);
 		}
@@ -1190,7 +1190,7 @@
 				$wrapper->git_checkout($approot, null, ['lib/discourse_ip_info.rb']);
 			}
 
-			$ret = $wrapper->git_checkout($approot, "v${version}");
+			$ret = $wrapper->git_checkout($approot, "v{$version}");
 			$this->applyPatches($wrapper, $approot, $version);
 
 			// uri updates to 0.11.0
