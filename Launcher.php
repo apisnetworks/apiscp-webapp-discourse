@@ -83,8 +83,8 @@ class Launcher
 		}
 
 		$command = $this->file_get_file_contents($this->appRoot . '/' . self::LAUNCHER_NAME);
-		if (!preg_match('/(?:\s|\b)(?:-p|--port)\s*(\d+)/', $command, $matches)) {
-			fatal("Unable to detect report in `%s'", $this->appRoot . '/' . self::LAUNCHER_NAME);
+		if (!preg_match('/(?:\s|\b)(?:(?:-p|--port)\s*|UNICORN_PORT=)(\d+)/', $command, $matches)) {
+			fatal("Unable to detect port in `%s'", $this->appRoot . '/' . self::LAUNCHER_NAME);
 		}
 
 		return (int)$matches[1];
