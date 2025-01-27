@@ -195,7 +195,7 @@
 				return error('Failed to enable task scheduling');
 			}
 
-			if (!empty($opts['maxmind']) && !ctype_alnum($opts['maxmind'])) {
+			if (!empty($opts['maxmind']) && !preg_match('/^[a-zA-Z0-9_]{4,}$/', $opts['maxmind'])) {
 				return error('A MaxMind GeoLite2 key is required.');
 			}
 
