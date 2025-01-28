@@ -863,7 +863,9 @@
 			if (!$ret['success']) {
 				return error('Failed to install packages: %s', $ret['error']);
 			}
-			$this->fixupMaxMind($wrapper, $approot);
+			if (version_compare($discourseVersion, '3.1.0', '<')) {
+				$this->fixupMaxMind($wrapper, $approot);
+			}
 			$env = [
 				'RAILS_ENV' => $appenv,
 				'NODE_VERSION' => $nodeVersion
