@@ -934,7 +934,13 @@
 				return false;
 			}
 			$user = $this->getDocrootUser($approot);
-			return Passenger::instantiateContexted(\Auth::context($user, $this->site),
+			$ctx = \Auth::context($user, $this->site);
+			$launcher = Launcher::instantiateContexted($ctx);
+			if ($launcher->exists()) {
+				return $launcher->restart();
+			}
+
+			return Passenger::instantiateContexted($ctx,
 				[$approot, 'ruby'])->restart();
 		}
 
